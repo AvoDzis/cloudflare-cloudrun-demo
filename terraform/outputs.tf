@@ -33,25 +33,25 @@ output "artifact_registry_repository_url" {
   value       = module.artifact_registry.repository_url
 }
 
-output "load_balancer_ip" {
-  description = "Load Balancer static IP address"
-  value       = module.load_balancer.load_balancer_ip
-}
+# output "load_balancer_ip" {
+#   description = "Load Balancer static IP address"
+#   value       = module.load_balancer.load_balancer_ip
+# }
 
-output "ssl_certificate_status" {
-  description = "SSL certificate provisioning status"
-  value       = module.load_balancer.ssl_certificate_status
-}
+# output "ssl_certificate_status" {
+#   description = "SSL certificate provisioning status"
+#   value       = module.load_balancer.ssl_certificate_status
+# }
 
-output "api_domain" {
-  description = "API domain URL"
-  value       = module.cloudflare.api_domain
-}
+# output "api_domain" {
+#   description = "API domain URL"
+#   value       = module.cloudflare.api_domain
+# }
 
-output "health_api_domain" {
-  description = "Health API domain URL"
-  value       = module.cloudflare.health_api_domain
-}
+# output "health_api_domain" {
+#   description = "Health API domain URL"
+#   value       = module.cloudflare.health_api_domain
+# }
 
 output "db_connection_command" {
   description = "Command to connect to database via IAP tunnel"
