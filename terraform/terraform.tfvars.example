@@ -1,0 +1,35 @@
+# GCP Configuration
+project_id = "test-project-402414"
+region     = "us-central1"
+zone       = "us-central1-a"
+environment = "prod"
+
+# Domain Configuration
+domain = "avodzis.online"
+
+# Cloudflare API Token (set via environment variable instead)
+# cloudflare_api_token = "your-cloudflare-api-token"
+
+# Alert Email
+alert_email = "you@example.com"
+
+# Network Configuration
+vpc_cidr    = "10.0.0.0/16"
+subnet_cidr = "10.0.1.0/24"
+
+# Database Configuration
+db_name = "labdb"
+db_user = "labuser"
+
+# VM Configuration
+vm_machine_type = "e2-micro"
+
+# Cloud Run Configuration
+cloud_run_min_instances = 1
+cloud_run_max_instances = 10
+cloud_run_cpu           = "1"
+cloud_run_memory        = "512Mi"
+cloud_run_concurrency   = 80
+
+# Artifact Registry
+artifact_registry_repository = "lab-repo"
