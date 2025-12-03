@@ -21,7 +21,7 @@ spec:
               containerPort: 8080
           env:
             - name: DB_HOST
-              value: "REPLACE_WITH_VM_INTERNAL_IP"  # Get from: terraform output -raw vm_internal_ip
+              value: "10.0.1.2"  # Get from: terraform output -raw vm_internal_ip
             - name: DB_NAME
               value: "labdb"
             - name: DB_USER

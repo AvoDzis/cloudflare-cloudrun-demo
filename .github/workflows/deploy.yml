@@ -47,25 +47,6 @@ jobs:
         with:
           version: '>= 500.0.0'
 
-      - name: Set up Terraform
-        uses: hashicorp/setup-terraform@v3
-        with:
-          terraform_version: 1.6.0
-
-      # Note: Terraform is deployed manually, not via this workflow
-      # Infrastructure changes should be reviewed and applied locally
-
-      - name: Get Terraform Outputs
-        id: terraform-outputs
-        run: |
-          cd terraform
-          echo "vm_ip=$(terraform output -raw vm_internal_ip)" >> $GITHUB_OUTPUT
-          echo "service_account=$(terraform output -raw cloud_run_service_account)" >> $GITHUB_OUTPUT
-
-      - name: Update Cloud Run YAML with Terraform outputs
-        run: |
-          sed -i "s/REPLACE_WITH_VM_INTERNAL_IP/${{ steps.terraform-outputs.outputs.vm_ip }}/g" resources/prod/service.prod.yaml
-
       - name: Install Dependencies
         if: steps.npm-cache.outputs.cache-hit != 'true'
         run: npm ci
