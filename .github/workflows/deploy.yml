@@ -49,7 +49,7 @@ jobs:
 
       - name: Install Dependencies
         if: steps.npm-cache.outputs.cache-hit != 'true'
-        run: npm ci
+        run: npm install
         working-directory: app
 
       - name: Install Skaffold
