@@ -1,0 +1,4 @@
+# Changes to CI/CD and to the CI identities need the owner's review
+# (enforced when branch protection requires code-owner reviews).
+/.github/             @AvoDzis
+/terraform/bootstrap/ @AvoDzis

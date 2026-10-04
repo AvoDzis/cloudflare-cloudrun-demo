@@ -1,0 +1,93 @@
+#!/bin/bash
+# Rendered by Terraform (modules/database-vm). Runs as root on every boot and
+# is safe to re-run: it installs Docker once, mounts the data disk, and starts
+# Postgres in a container whose data lives on that disk.
+set -euo pipefail
+
+DB_NAME="${db_name}"
+DB_USER="${db_user}"
+PASSWORD_SECRET="${password_secret}"
+POSTGRES_IMAGE="${postgres_image}"
+DEVICE="/dev/disk/by-id/google-${device_name}"
+MOUNT_POINT="/mnt/disks/pgdata"
+CONFIG_DIR="/etc/quotes-db"
+CONTAINER="quotes-db"
+
+log() { echo "quotes-db-startup: $*"; }
+
+# 1. Docker from the Ubuntu archive (reached through Cloud NAT)
+if ! command -v docker >/dev/null 2>&1; then
+  log "installing docker"
+  apt-get update -q
+  DEBIAN_FRONTEND=noninteractive apt-get install -y -q docker.io
+  systemctl enable --now docker
+fi
+
+# 2. Data disk: format on first boot only, mount by UUID
+if ! blkid "$DEVICE" >/dev/null 2>&1; then
+  log "formatting $DEVICE"
+  mkfs.ext4 -m 0 -E lazy_itable_init=0,lazy_journal_init=0,discard "$DEVICE"
+fi
+mkdir -p "$MOUNT_POINT"
+DISK_UUID="$(blkid -s UUID -o value "$DEVICE")"
+if ! grep -q "$DISK_UUID" /etc/fstab; then
+  echo "UUID=$DISK_UUID $MOUNT_POINT ext4 discard,defaults,nofail 0 2" >> /etc/fstab
+fi
+mountpoint -q "$MOUNT_POINT" || mount "$MOUNT_POINT"
+mkdir -p "$MOUNT_POINT/data"
+
+# 3. DB password from Secret Manager, using the VM service account's token.
+#    It never appears in instance metadata or in Terraform state.
+TOKEN="$(curl -sSf -H 'Metadata-Flavor: Google' \
+  'http://metadata.google.internal/computeMetadata/v1/instance/service-accounts/default/token' \
+  | python3 -c 'import json, sys; print(json.load(sys.stdin)["access_token"])')"
+DB_PASSWORD="$(curl -sSf -H "Authorization: Bearer $TOKEN" \
+  "https://secretmanager.googleapis.com/v1/$PASSWORD_SECRET/versions/latest:access" \
+  | python3 -c 'import base64, json, sys; print(base64.b64decode(json.load(sys.stdin)["payload"]["data"]).decode())')"
+
+install -d -m 0700 "$CONFIG_DIR"
+umask 077
+cat > "$CONFIG_DIR/postgres.env" <<EOF
+POSTGRES_DB=$DB_NAME
+POSTGRES_USER=$DB_USER
+POSTGRES_PASSWORD=$DB_PASSWORD
+EOF
+unset DB_PASSWORD TOKEN
+
+# 4. Schema and sample data. The postgres image runs this only when the data
+#    directory is empty, i.e. on the very first start.
+umask 022
+cat > "$CONFIG_DIR/init.sql" <<'SQL'
+CREATE TABLE IF NOT EXISTS quotes (
+  id SERIAL PRIMARY KEY,
+  quote TEXT NOT NULL,
+  author VARCHAR(100),
+  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+INSERT INTO quotes (quote, author)
+SELECT * FROM (VALUES
+  ('The only way to do great work is to love what you do.', 'Steve Jobs'),
+  ('Life is what happens when you''re busy making other plans.', 'John Lennon'),
+  ('In the middle of difficulty lies opportunity.', 'Albert Einstein'),
+  ('Success is not final, failure is not fatal: it is the courage to continue that counts.', 'Winston Churchill'),
+  ('Be yourself; everyone else is already taken.', 'Oscar Wilde')
+) AS seed(quote, author)
+WHERE NOT EXISTS (SELECT 1 FROM quotes);
+SQL
+
+# 5. Postgres container. Docker restarts it after crashes and reboots.
+#    Port 5432 is reachable only from the subnet and IAP (VPC firewall rules).
+if [ -z "$(docker ps -aq --filter "name=^$CONTAINER$")" ]; then
+  log "starting $POSTGRES_IMAGE"
+  docker run -d --name "$CONTAINER" --restart unless-stopped \
+    --env-file "$CONFIG_DIR/postgres.env" \
+    -v "$MOUNT_POINT/data:/var/lib/postgresql/data" \
+    -v "$CONFIG_DIR/init.sql:/docker-entrypoint-initdb.d/init.sql:ro" \
+    -p 5432:5432 \
+    "$POSTGRES_IMAGE"
+else
+  docker start "$CONTAINER" >/dev/null
+fi
+
+log "done"

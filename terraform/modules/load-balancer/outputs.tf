@@ -1,29 +1,19 @@
-output "load_balancer_ip" {
-  description = "Load Balancer static IP address"
-  value       = google_compute_address.lb_ip.address
+output "ip_address" {
+  description = "Load balancer IPv4 address (origin for the Cloudflare A records)"
+  value       = google_compute_global_address.lb.address
 }
 
-output "ssl_certificate_id" {
-  description = "SSL certificate ID"
-  value       = google_compute_region_ssl_certificate.lb_cert.id
+output "dns_authorization_records" {
+  description = "CNAME records Certificate Manager needs, keyed by hostname"
+  value       = { for host, auth in google_certificate_manager_dns_authorization.this : host => auth.dns_resource_record[0] }
 }
 
-output "ssl_certificate_status" {
-  description = "SSL certificate status"
-  value       = google_compute_region_ssl_certificate.lb_cert.managed[0].status
+output "security_policy_name" {
+  description = "Cloud Armor policy name"
+  value       = google_compute_security_policy.edge_only.name
 }
 
-output "backend_service_id" {
-  description = "Backend service ID"
-  value       = google_compute_region_backend_service.lb_backend.id
-}
-
-output "neg_id" {
-  description = "Network Endpoint Group ID"
-  value       = google_compute_region_network_endpoint_group.cloud_run_neg.id
-}
-
-output "forwarding_rule_id" {
-  description = "Forwarding rule ID"
-  value       = google_compute_forwarding_rule.lb_forwarding_rule.id
+output "backend_service_name" {
+  description = "Backend service name"
+  value       = google_compute_backend_service.app.name
 }

@@ -1,57 +1,24 @@
 const express = require('express');
-const { pool } = require('../config/database');
-const logger = require('../utils/logger');
-
-const router = express.Router();
-
-// Escape database values before putting them into HTML
-const escapeHtml = (value) => String(value)
-  .replace(/&/g, '&amp;')
-  .replace(/</g, '&lt;')
-  .replace(/>/g, '&gt;')
-  .replace(/"/g, '&quot;')
-  .replace(/'/g, '&#39;');
+const { escapeHtml, renderPage } = require('../utils/html');
+const { randomQuote } = require('../quotes');
 
 // GET / - Main page with random quote
-router.get('/', async (req, res) => {
-  try {
-    const result = await pool.query(
-      'SELECT id, quote, author, created_at FROM quotes ORDER BY RANDOM() LIMIT 1'
-    );
+module.exports = ({ pool, logger }) => {
+  const router = express.Router();
 
-    if (result.rows.length === 0) {
-      logger.warn('No quotes found in database');
-      return res.status(404).send(`
-        <!DOCTYPE html>
-        <html>
-        <head>
-          <title>Quote App</title>
-          <link rel="stylesheet" href="/static/style.css">
-        </head>
-        <body>
-          <div class="container">
-            <h1>No Quotes Found</h1>
-            <p>The database is empty. Please initialize it with quotes.</p>
-          </div>
-        </body>
-        </html>
-      `);
-    }
+  router.get('/', async (req, res) => {
+    try {
+      const quote = await randomQuote(pool);
 
-    const quote = result.rows[0];
+      if (!quote) {
+        logger.warn('No quotes found in database');
+        return res.status(404).send(renderPage('Quote App', `
+          <h1>No Quotes Found</h1>
+          <p>The database is empty. Please initialize it with quotes.</p>`));
+      }
 
-    res.set('Cache-Control', 'public, max-age=300');
-    res.send(`
-      <!DOCTYPE html>
-      <html>
-      <head>
-        <title>Quote of the Moment</title>
-        <meta charset="UTF-8">
-        <meta name="viewport" content="width=device-width, initial-scale=1.0">
-        <link rel="stylesheet" href="/static/style.css">
-      </head>
-      <body>
-        <div class="container">
+      res.set('Cache-Control', 'public, max-age=300');
+      res.send(renderPage('Quote of the Moment', `
           <h1>Quote of the Moment</h1>
           <div class="quote-card">
             <blockquote>
@@ -60,34 +27,18 @@ router.get('/', async (req, res) => {
             </blockquote>
           </div>
           <div class="actions">
-            <button onclick="location.reload()">Get Another Quote</button>
+            <button type="button" id="another-quote">Get Another Quote</button>
             <a href="/api/quote">View as JSON</a>
-          </div>
-        </div>
-        <script src="/static/app.js"></script>
-      </body>
-      </html>
-    `);
+          </div>`));
 
-    logger.info({ quoteId: quote.id }, 'Served random quote');
-  } catch (err) {
-    logger.error({ err }, 'Error fetching quote');
-    res.status(500).send(`
-      <!DOCTYPE html>
-      <html>
-      <head>
-        <title>Error</title>
-        <link rel="stylesheet" href="/static/style.css">
-      </head>
-      <body>
-        <div class="container">
+      logger.info({ quoteId: quote.id }, 'Served random quote');
+    } catch (err) {
+      logger.error({ err }, 'Error fetching quote');
+      res.status(500).send(renderPage('Error', `
           <h1>Error</h1>
-          <p>Unable to fetch quote. Please try again later.</p>
-        </div>
-      </body>
-      </html>
-    `);
-  }
-});
+          <p>Unable to fetch quote. Please try again later.</p>`));
+    }
+  });
 
-module.exports = router;
+  return router;
+};

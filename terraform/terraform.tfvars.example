@@ -1,35 +1,16 @@
-# GCP Configuration
-project_id = "your-project-id"
-region     = "us-central1"
-zone       = "us-central1-a"
-environment = "prod"
+# Local runs: copy to prod.tfvars (git-ignored). CI passes the same values as
+# TF_VAR_* environment variables from GitHub repository variables.
 
-# Domain Configuration
-domain = "example.com"
+project_id               = "your-project-id"
+domain                   = "example.com"
+alert_emails             = ["alerts@example.com"]
+deployer_service_account = "gh-app-deploy@your-project-id.iam.gserviceaccount.com"
 
-# Cloudflare API Token (set via environment variable instead)
-# cloudflare_api_token = "your-cloudflare-api-token"
+# Optional overrides
+# region                    = "us-central1"
+# zone                      = "us-central1-a"
+# allowed_countries         = ["ES", "AM"]
+# cloudflare_paid_waf       = false
+# cloudflare_bot_fight_mode = false
 
-# Alert Email
-alert_email = "you@example.com"
-
-# Network Configuration
-vpc_cidr    = "10.0.0.0/16"
-subnet_cidr = "10.0.1.0/24"
-
-# Database Configuration
-db_name = "labdb"
-db_user = "labuser"
-
-# VM Configuration
-vm_machine_type = "e2-micro"
-
-# Cloud Run Configuration
-cloud_run_min_instances = 1
-cloud_run_max_instances = 10
-cloud_run_cpu           = "1"
-cloud_run_memory        = "512Mi"
-cloud_run_concurrency   = 80
-
-# Artifact Registry
-artifact_registry_repository = "lab-repo"
+# cloudflare_api_token: set TF_VAR_cloudflare_api_token instead of writing it here

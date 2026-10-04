@@ -1,0 +1,5 @@
+# First run only: copy to backend_override.tf (git-ignored) so the state is
+# kept locally until the bucket exists. Delete it before migrating the state.
+terraform {
+  backend "local" {}
+}

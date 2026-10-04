@@ -1,66 +1,54 @@
-# VPC Network
 resource "google_compute_network" "vpc" {
   name                    = "${var.environment}-cloud-run-vpc"
   auto_create_subnetworks = false
-  project                 = var.project_id
+  routing_mode            = "REGIONAL"
 }
 
-# Subnet
+# Shared by the database VM and Cloud Run Direct VPC egress
 resource "google_compute_subnetwork" "subnet" {
   name          = "${var.environment}-cloud-run-subnet"
   ip_cidr_range = var.subnet_cidr
   region        = var.region
   network       = google_compute_network.vpc.id
-  project       = var.project_id
 
-  # Enable Private Google Access for accessing Google APIs without external IP
+  # Reach Google APIs (Secret Manager, Artifact Registry) without public IPs
   private_ip_google_access = true
 }
 
-# Firewall rule: Allow IAP tunneling for SSH access
+# IAP TCP forwarding: SSH and `gcloud compute start-iap-tunnel ... 5432`
 resource "google_compute_firewall" "allow_iap" {
-  name    = "${var.environment}-allow-iap-ssh"
+  name    = "${var.environment}-allow-iap"
   network = google_compute_network.vpc.name
-  project = var.project_id
 
   allow {
     protocol = "tcp"
-    ports    = ["22"]
+    ports    = ["22", tostring(var.db_port)]
   }
 
-  # IAP's IP range
   source_ranges = ["35.235.240.0/20"]
-
-  target_tags = ["allow-iap-ssh"]
-
-  description = "Allow SSH access via Identity-Aware Proxy"
+  target_tags   = [var.db_network_tag]
+  description   = "SSH and Postgres through Identity-Aware Proxy"
 }
 
-# Firewall rule: Allow Cloud Run to PostgreSQL
-resource "google_compute_firewall" "allow_cloud_run_to_db" {
-  name    = "${var.environment}-allow-cloud-run-to-postgres"
+# Cloud Run instances get addresses from the subnet (Direct VPC egress)
+resource "google_compute_firewall" "allow_subnet_to_db" {
+  name    = "${var.environment}-allow-subnet-to-postgres"
   network = google_compute_network.vpc.name
-  project = var.project_id
 
   allow {
     protocol = "tcp"
-    ports    = ["5432"]
+    ports    = [tostring(var.db_port)]
   }
 
-  # Allow from entire subnet (Cloud Run will be in this subnet)
   source_ranges = [var.subnet_cidr]
-
-  target_tags = ["postgres-server"]
-
-  description = "Allow Cloud Run to connect to PostgreSQL"
+  target_tags   = [var.db_network_tag]
+  description   = "Cloud Run (Direct VPC egress) to Postgres"
 }
 
-# Firewall rule: Default deny all other ingress
-# Note: Google Cloud has an implicit deny all rule, but we make it explicit
+# GCP already denies ingress implicitly; an explicit rule makes it visible and logged
 resource "google_compute_firewall" "deny_all_ingress" {
   name     = "${var.environment}-deny-all-ingress"
   network  = google_compute_network.vpc.name
-  project  = var.project_id
   priority = 65534
 
   deny {
@@ -68,6 +56,35 @@ resource "google_compute_firewall" "deny_all_ingress" {
   }
 
   source_ranges = ["0.0.0.0/0"]
+  description   = "Default deny all ingress traffic"
 
-  description = "Default deny all ingress traffic"
+  log_config {
+    metadata = "EXCLUDE_ALL_METADATA"
+  }
+}
+
+# Outbound internet for the VM (apt packages, container image pulls).
+# The VM has no external IP; Cloud Run egress stays private-ranges-only.
+resource "google_compute_router" "router" {
+  name    = "${var.environment}-router"
+  region  = var.region
+  network = google_compute_network.vpc.id
+}
+
+resource "google_compute_router_nat" "nat" {
+  name                               = "${var.environment}-nat"
+  router                             = google_compute_router.router.name
+  region                             = var.region
+  nat_ip_allocate_option             = "AUTO_ONLY"
+  source_subnetwork_ip_ranges_to_nat = "LIST_OF_SUBNETWORKS"
+
+  subnetwork {
+    name                    = google_compute_subnetwork.subnet.id
+    source_ip_ranges_to_nat = ["ALL_IP_RANGES"]
+  }
+
+  log_config {
+    enable = true
+    filter = "ERRORS_ONLY"
+  }
 }

@@ -1,8 +1,3 @@
-variable "project_id" {
-  description = "GCP Project ID"
-  type        = string
-}
-
 variable "region" {
   description = "GCP region"
   type        = string
@@ -18,7 +13,19 @@ variable "repository_name" {
   type        = string
 }
 
-variable "cloud_run_service_account" {
-  description = "Cloud Run service account email"
+variable "deployer_service_account" {
+  description = "Email of the CD service account that pushes images"
   type        = string
+}
+
+variable "keep_recent_images" {
+  description = "Always keep this many most recent image versions"
+  type        = number
+  default     = 10
+}
+
+variable "delete_after_days" {
+  description = "Delete image versions older than this (except the kept recent ones)"
+  type        = number
+  default     = 30
 }

@@ -25,4 +25,7 @@ terraform.rc
 
 # Ignore sensitive files
 *.backup
-.terraform.lock.hcl
+
+# Saved plans (may contain secrets)
+*.tfplan
+tfplan

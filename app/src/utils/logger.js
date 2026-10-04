@@ -1,12 +1,22 @@
 const pino = require('pino');
 
-// Create Pino logger with JSON output for Cloud Logging
+// pino level -> Cloud Logging severity (https://cloud.google.com/logging/docs/structured-logging)
+const SEVERITY = {
+  trace: 'DEBUG',
+  debug: 'DEBUG',
+  info: 'INFO',
+  warn: 'WARNING',
+  error: 'ERROR',
+  fatal: 'CRITICAL'
+};
+
+// JSON logs on stdout. Cloud Run forwards them to Cloud Logging, which reads
+// `severity` and `message` as the entry's severity and summary.
 const logger = pino({
   level: process.env.LOG_LEVEL || 'info',
+  messageKey: 'message',
   formatters: {
-    level: (label) => {
-      return { severity: label.toUpperCase() };
-    }
+    level: (label) => ({ severity: SEVERITY[label] || 'DEFAULT' })
   },
   timestamp: pino.stdTimeFunctions.isoTime,
   base: {

@@ -1,0 +1,47 @@
+name: Cloudflare token check
+
+# Weekly: fails (and so notifies) when the Cloudflare API token used by
+# Terraform is inactive or expires within WARN_DAYS.
+# API: https://developers.cloudflare.com/api/resources/user/subresources/tokens/methods/verify/
+on:
+  schedule:
+    - cron: "0 6 * * 1"
+  workflow_dispatch:
+
+permissions: {}
+
+jobs:
+  check:
+    name: Verify token and expiry
+    runs-on: ubuntu-latest
+    permissions: {}
+    env:
+      CF_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+      WARN_DAYS: "21"
+    steps:
+      - name: Check
+        run: |
+          if [ -z "$CF_TOKEN" ]; then
+            echo "::notice::CLOUDFLARE_API_TOKEN is not set; nothing to check"
+            exit 0
+          fi
+          resp="$(curl -sS --max-time 20 -H "Authorization: Bearer $CF_TOKEN" \
+            https://api.cloudflare.com/client/v4/user/tokens/verify)"
+          status="$(jq -r '.result.status // "unknown"' <<<"$resp")"
+          expires="$(jq -r '.result.expires_on // empty' <<<"$resp")"
+
+          if [ "$status" != "active" ]; then
+            echo "::error::Cloudflare token status is '$status'"
+            exit 1
+          fi
+          if [ -z "$expires" ]; then
+            echo "::warning::The token has no expiry date. Set one and rotate it regularly."
+            exit 0
+          fi
+
+          days_left=$(( ( $(date -d "$expires" +%s) - $(date +%s) ) / 86400 ))
+          if [ "$days_left" -lt "$WARN_DAYS" ]; then
+            echo "::error::Cloudflare token expires in $days_left days ($expires). Rotate it and update the CLOUDFLARE_API_TOKEN secret."
+            exit 1
+          fi
+          echo "Token is active and expires in $days_left days ($expires)."

@@ -3,9 +3,11 @@
   "version": "1.0.0",
   "description": "Node.js Express application for Cloud Run + Cloudflare Lab",
   "main": "server.js",
+  "private": true,
   "scripts": {
     "start": "node server.js",
-    "dev": "node server.js"
+    "dev": "node --env-file=.env server.js",
+    "test": "node --test"
   },
   "keywords": ["express", "cloud-run", "postgresql", "cloudflare"],
   "author": "",
@@ -17,6 +19,6 @@
     "pino-http": "^8.6.1"
   },
   "engines": {
-    "node": ">=20.0.0"
+    "node": ">=22.0.0"
   }
 }

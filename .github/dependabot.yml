@@ -1,0 +1,31 @@
+# Keeps pinned action SHAs, npm packages, Terraform providers and the base
+# image current. https://docs.github.com/code-security/dependabot
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    groups:
+      actions:
+        patterns: ["*"]
+
+  - package-ecosystem: npm
+    directory: /app
+    schedule:
+      interval: weekly
+    groups:
+      npm-minor-patch:
+        update-types: [minor, patch]
+
+  - package-ecosystem: docker
+    directory: /app
+    schedule:
+      interval: weekly
+
+  - package-ecosystem: terraform
+    directories:
+      - /terraform
+      - /terraform/bootstrap
+    schedule:
+      interval: weekly

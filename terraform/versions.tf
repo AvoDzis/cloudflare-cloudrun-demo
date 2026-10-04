@@ -1,24 +1,26 @@
 terraform {
-  required_version = ">= 1.6.0"
+  # 1.11+: write-only arguments (secret_data_wo) and ephemeral resources keep
+  # the DB password out of plan and state files
+  required_version = ">= 1.11.0"
 
   required_providers {
     google = {
       source  = "hashicorp/google"
-      version = "~> 5.0"
+      version = "~> 8.5"
     }
     cloudflare = {
       source  = "cloudflare/cloudflare"
-      version = "~> 4.0"
+      version = "~> 5.26"
     }
     random = {
       source  = "hashicorp/random"
-      version = "~> 3.5"
+      version = "~> 3.9"
     }
   }
 
-  # Bucket is passed at init time:
-  #   terraform init -backend-config="bucket=<your-state-bucket>"
+  # Bucket comes from terraform/bootstrap:
+  #   terraform init -backend-config="bucket=<state bucket>"
   backend "gcs" {
-    prefix = "terraform/state"
+    prefix = "main"
   }
 }

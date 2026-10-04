@@ -1,9 +1,7 @@
-// Simple client-side script for the quote app
+// Client-side script for the quote app (no inline handlers, so the CSP can stay strict)
 
 document.addEventListener('DOMContentLoaded', () => {
-  console.log('Quote app loaded successfully');
-
-  // Add fade-in animation to quote card
+  // Fade-in animation for the quote card
   const quoteCard = document.querySelector('.quote-card');
   if (quoteCard) {
     quoteCard.style.opacity = '0';
@@ -16,10 +14,14 @@ document.addEventListener('DOMContentLoaded', () => {
     }, 100);
   }
 
-  // Add click animation to buttons
-  const buttons = document.querySelectorAll('button');
-  buttons.forEach(button => {
-    button.addEventListener('click', (e) => {
+  const anotherQuote = document.getElementById('another-quote');
+  if (anotherQuote) {
+    anotherQuote.addEventListener('click', () => location.reload());
+  }
+
+  // Click animation for buttons
+  document.querySelectorAll('button').forEach((button) => {
+    button.addEventListener('click', () => {
       button.style.transform = 'scale(0.95)';
       setTimeout(() => {
         button.style.transform = 'scale(1)';

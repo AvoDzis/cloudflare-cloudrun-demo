@@ -1,0 +1,6 @@
+project_id           = "your-project-id"
+region               = "us-central1"
+state_bucket_name    = "your-project-id-tfstate"
+github_repository    = "your-github-user/cloudflare-cloudrun-demo"
+github_repository_id = "123456789" # gh api repos/OWNER/NAME --jq .id
+github_environment   = "prod"

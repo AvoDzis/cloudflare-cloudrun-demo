@@ -1,38 +1,34 @@
 const express = require('express');
-const { pool } = require('../config/database');
-const logger = require('../utils/logger');
 
-const router = express.Router();
+module.exports = ({ pool, logger }) => {
+  const router = express.Router();
 
-// GET /health - Health check endpoint
-router.get('/health', async (req, res) => {
-  const healthcheck = {
-    status: 'healthy',
-    timestamp: new Date().toISOString(),
-    uptime: process.uptime(),
-    database: 'unknown'
-  };
+  // GET /livez - process is up (Cloud Run liveness probe, Docker HEALTHCHECK).
+  // Deliberately does not touch the database, so a DB outage doesn't restart instances.
+  router.get('/livez', (req, res) => {
+    res.set('Cache-Control', 'no-cache');
+    res.status(200).json({ status: 'alive' });
+  });
 
-  try {
-    // Test database connectivity
-    const client = await pool.connect();
-    await client.query('SELECT 1');
-    client.release();
-
-    healthcheck.database = 'connected';
+  // GET /health - app can reach the database (startup probe, uptime check)
+  router.get('/health', async (req, res) => {
+    const healthcheck = {
+      status: 'healthy',
+      timestamp: new Date().toISOString(),
+      database: 'connected'
+    };
 
     res.set('Cache-Control', 'no-cache');
-    res.status(200).json(healthcheck);
+    try {
+      await pool.query('SELECT 1');
+      res.status(200).json(healthcheck);
+    } catch (err) {
+      logger.error({ err }, 'Health check failed - database connection error');
+      healthcheck.status = 'unhealthy';
+      healthcheck.database = 'disconnected';
+      res.status(503).json(healthcheck);
+    }
+  });
 
-  } catch (err) {
-    logger.error({ err }, 'Health check failed - database connection error');
-
-    healthcheck.status = 'unhealthy';
-    healthcheck.database = 'disconnected';
-
-    res.set('Cache-Control', 'no-cache');
-    res.status(503).json(healthcheck);
-  }
-});
-
-module.exports = router;
+  return router;
+};
