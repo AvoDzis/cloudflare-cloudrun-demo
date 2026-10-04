@@ -23,7 +23,7 @@ const httpLogger = pinoHttp({
       method: req.method,
       url: req.url,
       path: req.path,
-      user_ip: req.headers['x-forwarded-for'] || req.connection.remoteAddress,
+      user_ip: req.headers['x-forwarded-for'] || req.socket.remoteAddress,
       user_agent: req.headers['user-agent']
     }),
     res: (res) => ({

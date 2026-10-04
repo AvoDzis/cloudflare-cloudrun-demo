@@ -1,11 +1,11 @@
 # GCP Configuration
-project_id = "test-project-402414"
+project_id = "your-project-id"
 region     = "us-central1"
 zone       = "us-central1-a"
 environment = "prod"
 
 # Domain Configuration
-domain = "avodzis.online"
+domain = "example.com"
 
 # Cloudflare API Token (set via environment variable instead)
 # cloudflare_api_token = "your-cloudflare-api-token"

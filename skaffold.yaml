@@ -5,17 +5,17 @@ metadata:
 
 build:
   artifacts:
-    - image: us-central1-docker.pkg.dev/test-project-402414/lab-repo/app-prod
+    - image: us-central1-docker.pkg.dev/YOUR_PROJECT_ID/lab-repo/app-prod
       context: ./app
       docker:
         dockerfile: Dockerfile
   googleCloudBuild:
-    projectId: test-project-402414
+    projectId: YOUR_PROJECT_ID
     timeout: 600s
 
 deploy:
   cloudrun:
-    projectid: test-project-402414
+    projectid: YOUR_PROJECT_ID
     region: us-central1
 
 manifests:
@@ -28,16 +28,16 @@ profiles:
       - command: run
     build:
       artifacts:
-        - image: us-central1-docker.pkg.dev/test-project-402414/lab-repo/app-prod
+        - image: us-central1-docker.pkg.dev/YOUR_PROJECT_ID/lab-repo/app-prod
           context: ./app
           docker:
             dockerfile: Dockerfile
       googleCloudBuild:
-        projectId: test-project-402414
+        projectId: YOUR_PROJECT_ID
         timeout: 600s
     deploy:
       cloudrun:
-        projectid: test-project-402414
+        projectid: YOUR_PROJECT_ID
         region: us-central1
     manifests:
       rawYaml:

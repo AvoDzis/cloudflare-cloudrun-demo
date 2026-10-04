@@ -16,8 +16,9 @@ terraform {
     }
   }
 
+  # Bucket is passed at init time:
+  #   terraform init -backend-config="bucket=<your-state-bucket>"
   backend "gcs" {
-    bucket = "cloudrun-cloudflare-test"
     prefix = "terraform/state"
   }
 }

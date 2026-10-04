@@ -29,7 +29,6 @@ router.get('/health', async (req, res) => {
 
     healthcheck.status = 'unhealthy';
     healthcheck.database = 'disconnected';
-    healthcheck.error = err.message;
 
     res.set('Cache-Control', 'no-cache');
     res.status(503).json(healthcheck);

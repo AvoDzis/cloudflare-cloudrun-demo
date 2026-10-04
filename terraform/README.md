@@ -1,175 +1,46 @@
-# Terraform Infrastructure
+# Terraform
 
-This directory contains Terraform configuration for deploying the Cloud Run + Cloudflare infrastructure.
+The root module creates the GCP side of the demo. The Cloud Run service itself is deployed by Skaffold (`../skaffold.yaml`), not by Terraform. See the [main README](../README.md) for the full deploy steps and what was actually applied.
 
-## Prerequisites
+## Modules
 
-1. **GCP Project**: `test-project-402414`
-2. **Cloudflare Account** with domain `avodzis.online`
-3. **Terraform** >= 1.6.0
-4. **gcloud CLI** installed and authenticated
+| Module | Creates | Status |
+|--------|---------|--------|
+| `networking` | Custom VPC, subnet (Private Google Access), firewall: IAP → 22, subnet → 5432, deny-all | applied |
+| `compute` | e2-micro Ubuntu 22.04 VM, no external IP, OS Login, own SA (log + metric writer) | applied (the startup script doesn't start Postgres, see main README) |
+| `cloud-run-prerequisites` | Cloud Run SA with secretAccessor, logWriter, metricWriter | applied |
+| `artifact-registry` | Docker repo + reader binding for the Cloud Run SA | applied |
+| `load-balancer` | Regional external HTTPS LB, serverless NEG, static IP, cert | draft, fails `terraform validate` |
+| `cloudflare` | DNS records, WAF, rate limit, cache rules | draft, fails `terraform validate` |
+| `monitoring` | Uptime check, 5xx / p95 latency / uptime alert policies | draft, never applied |
 
-## Setup
+The root module also enables the needed APIs and generates the DB password (`random_password`), which it stores in Secret Manager as `<environment>-db-password`.
 
-### 1. Create GCS Backend Bucket
+## Inputs
 
-```bash
-export PROJECT_ID=test-project-402414
+These are required. Copy `terraform.tfvars.example` to `prod.tfvars` (git-ignored) and fill them in:
 
-# Create bucket for Terraform state
-gsutil mb gs://cloudrun-cloudflare-test
+| Variable | Notes |
+|----------|-------|
+| `project_id` | GCP project |
+| `domain` | Cloudflare zone (stage 2 only) |
+| `alert_email` | Alert notification email (stage 2 only) |
+| `cloudflare_api_token` | Set as `TF_VAR_cloudflare_api_token`. It's required by the provider block but only used in stage 2 |
 
-# Enable versioning
-gsutil versioning set on gs://cloudrun-cloudflare-test
-```
+Everything else has a default (region `us-central1`, `10.0.0.0/16` / `10.0.1.0/24`, `labdb` / `labuser`, `e2-micro`).
 
-### 2. Enable Required APIs
-
-```bash
-gcloud services enable \
-  run.googleapis.com \
-  compute.googleapis.com \
-  vpcaccess.googleapis.com \
-  secretmanager.googleapis.com \
-  artifactregistry.googleapis.com \
-  cloudbuild.googleapis.com \
-  monitoring.googleapis.com \
-  logging.googleapis.com \
-  iamcredentials.googleapis.com \
-  --project=$PROJECT_ID
-```
-
-### 3. Set Cloudflare API Token
+## Commands
 
 ```bash
-# Set as environment variable (recommended)
-export TF_VAR_cloudflare_api_token="your-cloudflare-api-token"
+terraform init -backend-config="bucket=<your-state-bucket>"   # GCS backend, prefix terraform/state
+terraform plan  -var-file=prod.tfvars
+terraform apply -var-file=prod.tfvars
+
+terraform output vm_internal_ip            # goes into resources/prod/service.prod.yaml
+terraform output db_connection_command     # IAP tunnel + psql
+gcloud secrets versions access latest --secret=prod-db-password
+
+terraform destroy -var-file=prod.tfvars
 ```
 
-**Creating Cloudflare API Token:**
-1. Go to: https://dash.cloudflare.com/profile/api-tokens
-2. Click "Create Token" → "Create Custom Token"
-3. Set permissions:
-   - Zone.DNS - Edit
-   - Zone.Zone Settings - Read
-   - Zone.WAF - Edit
-   - Zone.Cache Purge - Purge
-   - Account.Account Settings - Read
-4. Zone Resources: Include → Specific zone → avodzis.online
-5. Account Resources: Include → Your account
-
-## Deployment
-
-### Initialize Terraform
-
-```bash
-cd terraform
-terraform init
-```
-
-### Plan Infrastructure
-
-```bash
-terraform plan
-```
-
-### Apply Infrastructure
-
-```bash
-terraform apply
-```
-
-Review the plan and type `yes` to confirm.
-
-## Outputs
-
-After successful deployment, you'll see:
-
-```
-vpc_network_name              = "prod-cloud-run-vpc"
-vm_internal_ip                = "10.0.1.x"
-cloud_run_service_url         = "https://prod-lab-app-xxx.a.run.app"
-cloudflare_proxied_domain     = "https://api.avodzis.online"
-cloudflare_direct_domain      = "https://health.api.avodzis.online"
-artifact_registry_repository_url = "us-central1-docker.pkg.dev/test-project-402414/lab-repo"
-```
-
-## Accessing Resources
-
-### Connect to PostgreSQL via IAP Tunnel
-
-```bash
-# Get VM name from outputs
-VM_NAME=$(terraform output -raw vm_instance_name)
-
-# Start IAP tunnel
-gcloud compute start-iap-tunnel $VM_NAME 5432 \
-  --local-host-port=localhost:5432 \
-  --zone=us-central1-a
-
-# In another terminal, connect with psql
-psql -h localhost -p 5432 -U labuser -d labdb
-# Password is auto-generated and stored in Secret Manager
-```
-
-### View Secrets
-
-```bash
-# Database password
-gcloud secrets versions access latest --secret="prod-db-password"
-
-# Cloudflare validation secret
-gcloud secrets versions access latest --secret="prod-cloudflare-secret"
-```
-
-### View Cloud Run Logs
-
-```bash
-gcloud run services logs read prod-lab-app --region=us-central1
-```
-
-## Module Structure
-
-```
-modules/
-├── networking/          # VPC, subnet, firewall rules
-├── compute/             # VM with PostgreSQL
-├── cloud-run/           # Cloud Run service with Direct VPC Egress
-├── artifact-registry/   # Docker image repository
-├── cloudflare/          # DNS, WAF, cache rules
-└── monitoring/          # Uptime checks, alert policies
-```
-
-## Destroy Infrastructure
-
-```bash
-terraform destroy
-```
-
-Type `yes` to confirm deletion of all resources.
-
-## Notes
-
-- **Database Password**: Auto-generated 32-character password stored in Secret Manager
-- **Cloudflare Secret**: Auto-generated 64-character string for header validation
-- **VM has no external IP**: Access only via IAP tunnel
-- **Cloud Run uses Direct VPC Egress**: Connects directly to PostgreSQL without NAT
-- **Min 1 instance**: No cold starts
-
-## Troubleshooting
-
-### Error: Backend bucket doesn't exist
-```bash
-gsutil mb gs://cloudrun-cloudflare-test
-```
-
-### Error: API not enabled
-```bash
-# Enable the specific API mentioned in the error
-gcloud services enable <api-name> --project=$PROJECT_ID
-```
-
-### Error: Insufficient permissions
-Ensure your gcloud user has the following roles:
-- `roles/owner` or
-- `roles/editor` + `roles/secretmanager.admin`
+To try stage 2, uncomment the three modules at the bottom of `main.tf` and the matching outputs in `outputs.tf`. Fix the validation errors listed in the main README first.

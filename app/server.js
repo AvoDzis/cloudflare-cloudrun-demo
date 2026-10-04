@@ -52,8 +52,7 @@ app.use((req, res) => {
 app.use((err, req, res, next) => {
   logger.error({ err }, 'Unhandled error');
   res.status(500).json({
-    error: 'Internal server error',
-    message: err.message
+    error: 'Internal server error'
   });
 });
 

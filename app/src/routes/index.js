@@ -1,9 +1,16 @@
 const express = require('express');
-const path = require('path');
 const { pool } = require('../config/database');
 const logger = require('../utils/logger');
 
 const router = express.Router();
+
+// Escape database values before putting them into HTML
+const escapeHtml = (value) => String(value)
+  .replace(/&/g, '&amp;')
+  .replace(/</g, '&lt;')
+  .replace(/>/g, '&gt;')
+  .replace(/"/g, '&quot;')
+  .replace(/'/g, '&#39;');
 
 // GET / - Main page with random quote
 router.get('/', async (req, res) => {
@@ -48,8 +55,8 @@ router.get('/', async (req, res) => {
           <h1>Quote of the Moment</h1>
           <div class="quote-card">
             <blockquote>
-              <p class="quote-text">"${quote.quote}"</p>
-              <footer class="quote-author">— ${quote.author || 'Anonymous'}</footer>
+              <p class="quote-text">"${escapeHtml(quote.quote)}"</p>
+              <footer class="quote-author">— ${escapeHtml(quote.author || 'Anonymous')}</footer>
             </blockquote>
           </div>
           <div class="actions">

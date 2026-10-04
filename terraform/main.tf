@@ -58,15 +58,15 @@ module "networking" {
 module "compute" {
   source = "./modules/compute"
 
-  project_id         = var.project_id
-  zone               = var.zone
-  environment        = var.environment
-  machine_type       = var.vm_machine_type
-  network_self_link  = module.networking.network_self_link
-  subnet_self_link   = module.networking.subnet_self_link
-  db_name            = var.db_name
-  db_user            = var.db_user
-  db_password        = random_password.db_password.result
+  project_id        = var.project_id
+  zone              = var.zone
+  environment       = var.environment
+  machine_type      = var.vm_machine_type
+  network_self_link = module.networking.network_self_link
+  subnet_self_link  = module.networking.subnet_self_link
+  db_name           = var.db_name
+  db_user           = var.db_user
+  db_password       = random_password.db_password.result
 
   depends_on = [module.networking]
 }
@@ -76,10 +76,10 @@ module "compute" {
 module "cloud_run_prerequisites" {
   source = "./modules/cloud-run-prerequisites"
 
-  project_id    = var.project_id
-  region        = var.region
-  environment   = var.environment
-  network_name  = module.networking.network_name
+  project_id   = var.project_id
+  region       = var.region
+  environment  = var.environment
+  network_name = module.networking.network_name
 
   depends_on = [module.networking]
 }
@@ -88,11 +88,11 @@ module "cloud_run_prerequisites" {
 module "artifact_registry" {
   source = "./modules/artifact-registry"
 
-  project_id                 = var.project_id
-  region                     = var.region
-  environment                = var.environment
-  repository_name            = var.artifact_registry_repository
-  cloud_run_service_account  = module.cloud_run_prerequisites.service_account_email
+  project_id                = var.project_id
+  region                    = var.region
+  environment               = var.environment
+  repository_name           = var.artifact_registry_repository
+  cloud_run_service_account = module.cloud_run_prerequisites.service_account_email
 
   depends_on = [google_project_service.required_apis]
 }

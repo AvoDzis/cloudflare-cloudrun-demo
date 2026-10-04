@@ -9,8 +9,6 @@ jobs:
   validate:
     permissions:
       contents: 'read'
-      id-token: 'write'
-      pull-requests: write
     runs-on: ubuntu-latest
 
     steps:
@@ -20,7 +18,7 @@ jobs:
       - name: Set up Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: '20'
+          node-version: '24'
 
       - name: Authenticate to Google Cloud
         uses: 'google-github-actions/auth@v2'
@@ -45,7 +43,7 @@ jobs:
           TF_VAR_cloudflare_api_token: ${{ secrets.CLOUDFLARE_API_TOKEN }}
         run: |
           cd terraform
-          terraform init
+          terraform init -backend-config="bucket=${{ vars.TF_STATE_BUCKET }}"
 
       - name: Terraform Validate
         run: |

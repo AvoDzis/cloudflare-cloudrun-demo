@@ -1,7 +1,6 @@
 variable "project_id" {
   description = "GCP Project ID"
   type        = string
-  default     = "test-project-402414"
 }
 
 variable "region" {
@@ -23,9 +22,8 @@ variable "environment" {
 }
 
 variable "domain" {
-  description = "Root domain name"
+  description = "Root domain name (a zone in your Cloudflare account)"
   type        = string
-  default     = "avodzis.online"
 }
 
 variable "cloudflare_api_token" {
@@ -37,7 +35,6 @@ variable "cloudflare_api_token" {
 variable "alert_email" {
   description = "Email address for monitoring alerts"
   type        = string
-  default     = "you@example.com"
 }
 
 # Network configuration

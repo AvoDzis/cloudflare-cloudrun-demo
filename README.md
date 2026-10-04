@@ -1,435 +1,153 @@
-# Cloud Run + Load Balancer + Cloudflare Deployment Guide
+# Cloud Run + Cloudflare demo
 
-## Architecture Overview
+A GCP lab from December 2025: a small Node.js "quote of the moment" app runs on Cloud Run and reads from PostgreSQL on a private VM over Direct VPC egress. The infrastructure is Terraform, and Skaffold + Cloud Build handle deploys. An edge layer (regional HTTPS load balancer + Cloudflare DNS/WAF/cache + Cloud Monitoring) is drafted but was never applied.
+
+The original brief is in [LAB_REQUIREMENTS.md](LAB_REQUIREMENTS.md). Not everything in it was built. The status section below says exactly what was.
+
+## Status
+
+**Stage 1: applied.** Terraform created these in a personal GCP project:
+
+- a custom VPC + subnet with Private Google Access, and firewall rules (IAP SSH, Postgres only from the subnet, explicit deny-all)
+- an e2-micro Ubuntu VM with no external IP and OS Login
+- dedicated service accounts for the VM and Cloud Run
+- an Artifact Registry repo
+- a generated DB password in Secret Manager
+
+The app was built with Cloud Build and deployed to Cloud Run with `skaffold run -p prod`.
+
+- **Postgres is not automated any more.** Since the "compute engine script" commit (3 Dec 2025), the VM startup script only installs Docker and tries to mount a data disk (`google-postgres-data`) that Terraform never attaches, so it stops at that step. The earlier version of the script ran the Postgres container and created the `quotes` table. Ansible was planned for this but never written. On a fresh `terraform apply`, you start Postgres on the VM yourself (see [Deploy](#deploy-stage-1)).
+
+**Stage 2: draft, never applied.** The `load_balancer`, `cloudflare` and `monitoring` modules are commented out in `terraform/main.tf`. With them enabled, `terraform validate` fails on three errors:
+
+1. `google_compute_region_ssl_certificate` has no `managed` block. A Google-managed cert for a regional load balancer needs Certificate Manager instead.
+2. `modules/cloudflare` doesn't declare `cloudflare/cloudflare` in `required_providers`, so Terraform looks for a non-existent `hashicorp/cloudflare`.
+3. `cloudflare_rate_limit` uses `mode = "block"`, which isn't an allowed value. The resource is also deprecated in favour of a `cloudflare_ruleset` rate-limit rule.
+
+Other known gaps in the draft:
+
+- The Cloud Run service uses ingress `internal`. To sit behind an external load balancer it needs `internal-and-cloud-load-balancing`.
+- Cloudflare allows one zone ruleset per phase, but the module defines two custom-firewall and three cache-settings rulesets.
+- The bot-score rule needs Cloudflare Bot Management, and the OWASP managed ruleset needs a paid plan.
+- The app does not implement the `X-Cloudflare-Secret` header check from the brief.
+
+## Architecture (as designed)
 
 ```
-Internet Users (ES + AM only)
-        ↓
-Cloudflare Edge (Proxied)
-  - WAF Rules
-  - Cache Rules
-  - Geo-restriction
-        ↓
-Regional Load Balancer (us-central1)
-  - Static IP
-  - Google-managed SSL cert
-  - HTTPS (443)
-        ↓
-Cloud Run (Internal Ingress Only)
-  - Gen2, Min 1 instance
-  - VPC Direct Egress
-        ↓
-PostgreSQL VM (Internal IP only)
+Users (ES + AM only)
+   │
+Cloudflare: DNS, WAF, cache rules            ┐
+   │                                          │ stage 2 (draft)
+Regional external HTTPS load balancer         │
+   │  serverless NEG                          ┘
+Cloud Run "prod-lab-app" (gen2, min 1 instance, internal ingress)
+   │  Direct VPC egress, private ranges only
+VPC 10.0.0.0/16 → subnet 10.0.1.0/24
+   │  tcp/5432 from the subnet only
+e2-micro VM, no external IP, Postgres in Docker (access via IAP)
 ```
 
-## Prerequisites
+## Repository layout
 
-1. **GCP Project**: `test-project-402414`
-2. **Domain**: `avodzis.online` configured in Cloudflare
-3. **Tools**:
-   - gcloud CLI (authenticated)
-   - Terraform >= 1.6.0
-   - Skaffold
-   - kubectl (optional)
+| Path | What it is |
+|------|------------|
+| `app/` | Express app, Dockerfile (multi-stage, non-root, `HEALTHCHECK`) |
+| `resources/prod/service.prod.yaml` | Cloud Run (Knative) service manifest used by Skaffold |
+| `skaffold.yaml` | Build with Cloud Build, deploy the manifest to Cloud Run |
+| `terraform/` | Root module + modules: `networking`, `compute`, `cloud-run-prerequisites`, `artifact-registry` (stage 1), and `load-balancer`, `cloudflare`, `monitoring` (stage 2 draft). See [terraform/README.md](terraform/README.md) |
+| `.github/workflows/` | PR validation and a manual deploy workflow. See [.github/README.md](.github/README.md) |
+| `LAB_REQUIREMENTS.md` | The original brief |
 
-## Step-by-Step Deployment
+## The app
 
-### Phase 1: Initial Infrastructure Setup
+| Endpoint | Returns | Cache-Control |
+|----------|---------|---------------|
+| `GET /` | HTML page with a random quote from Postgres | `public, max-age=300` |
+| `GET /api/quote` | the same quote as JSON | `public, max-age=300` |
+| `GET /health` | `{"status": ...}`, checks the DB; 503 if the DB is down | `no-cache` |
+| `GET /static/*` | CSS/JS | `public, max-age=3600` |
 
-#### 1.1 Create GCS Backend for Terraform State
+The app logs in JSON with a `severity` field that Cloud Logging understands (pino + pino-http). It uses a `pg` connection pool (max 10), closes the pool on SIGTERM, and reads all DB settings from environment variables (see [`app/.env.example`](app/.env.example)).
+
+### Run locally
 
 ```bash
-export PROJECT_ID=test-project-402414
+docker run -d --name quotes-db -p 5432:5432 \
+  -e POSTGRES_DB=labdb -e POSTGRES_USER=labuser -e POSTGRES_PASSWORD=change-me \
+  postgres:16-alpine
+sleep 5   # give Postgres a moment to start
+docker exec -i quotes-db psql -U labuser -d labdb <<'SQL'
+CREATE TABLE quotes (
+  id SERIAL PRIMARY KEY,
+  quote TEXT NOT NULL,
+  author VARCHAR(100),
+  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+INSERT INTO quotes (quote, author) VALUES
+  ('In the middle of difficulty lies opportunity.', 'Albert Einstein');
+SQL
 
-# Create bucket
-gsutil mb gs://cloudrun-cloudflare-test
-
-# Enable versioning
-gsutil versioning set on gs://cloudrun-cloudflare-test
+cd app
+cp .env.example .env
+npm ci
+node --env-file=.env server.js   # http://localhost:8080
 ```
 
-#### 1.2 Enable Required GCP APIs
+## Deploy (stage 1)
+
+You need a GCP project, `gcloud`, Terraform >= 1.6 and Skaffold.
 
 ```bash
-gcloud services enable \
-  run.googleapis.com \
-  compute.googleapis.com \
-  vpcaccess.googleapis.com \
-  secretmanager.googleapis.com \
-  artifactregistry.googleapis.com \
-  cloudbuild.googleapis.com \
-  monitoring.googleapis.com \
-  logging.googleapis.com \
-  iamcredentials.googleapis.com \
-  --project=$PROJECT_ID
-```
+export PROJECT_ID=your-project-id
+export STATE_BUCKET=your-terraform-state-bucket
 
-#### 1.3 Create Cloudflare API Token
+# 1. Terraform state bucket
+gsutil mb -p $PROJECT_ID gs://$STATE_BUCKET
+gsutil versioning set on gs://$STATE_BUCKET
 
-1. Go to: https://dash.cloudflare.com/profile/api-tokens
-2. Click "Create Token" → "Create Custom Token"
-3. Set permissions:
-   - Zone.DNS - Edit
-   - Zone.Zone Settings - Read
-   - Zone.WAF - Edit
-   - Zone.Cache Purge - Purge
-   - Account.Account Settings - Read
-4. Zone Resources: Include → Specific zone → `avodzis.online`
-5. Save the token
-
-#### 1.4 Set Environment Variables
-
-```bash
-export TF_VAR_cloudflare_api_token="your-cloudflare-api-token"
-```
-
-### Phase 2: Deploy Base Infrastructure (Without Load Balancer)
-
-**Important**: We deploy in stages because Load Balancer needs Cloud Run service to exist first.
-
-#### 2.1 Comment Out Load Balancer Module
-
-Edit `terraform/main.tf` and **comment out** the Load Balancer module:
-
-```hcl
-# # Load Balancer Module
-# # Note: Deploy this AFTER Cloud Run service is deployed via Skaffold
-# module "load_balancer" {
-#   source = "./modules/load-balancer"
-#   ...
-# }
-```
-
-Also comment out Cloudflare and Monitoring modules (they depend on LB).
-
-#### 2.2 Deploy Base Infrastructure
-
-```bash
+# 2. Infrastructure
 cd terraform
+cp terraform.tfvars.example prod.tfvars                 # edit project_id, domain, alert_email
+export TF_VAR_cloudflare_api_token=unused-in-stage-1    # required variable; only stage 2 uses it
+terraform init -backend-config="bucket=$STATE_BUCKET"
+terraform apply -var-file=prod.tfvars
+cd ..
 
-terraform init
+# 3. Put your project ID and the VM's IP into the manifests
+sed -i.bak "s/YOUR_PROJECT_ID/$PROJECT_ID/g" skaffold.yaml resources/prod/service.prod.yaml
+sed -i.bak "s/REPLACE_WITH_VM_INTERNAL_IP/$(terraform -chdir=terraform output -raw vm_internal_ip)/" \
+  resources/prod/service.prod.yaml
 
-terraform plan -var-file="prod.tfvars"
+# 4. Start Postgres on the VM (not automated, see Status)
+gcloud compute ssh prod-postgres-vm --zone=us-central1-a --tunnel-through-iap
+#   on the VM: docker run postgres with POSTGRES_DB=labdb, POSTGRES_USER=labuser and the password from
+#   `gcloud secrets versions access latest --secret=prod-db-password`, publish 5432, allow 10.0.0.0/16
+#   in pg_hba.conf, then create the quotes table as in "Run locally".
 
-terraform apply -var-file="prod.tfvars"
-```
-
-#### 2.3 Note Important Outputs
-
-```bash
-# Get VM internal IP (needed for Cloud Run YAML)
-VM_IP=$(terraform output -raw vm_internal_ip)
-echo "VM Internal IP: $VM_IP"
-
-# Get service account email
-SA_EMAIL=$(terraform output -raw cloud_run_service_account)
-echo "Service Account: $SA_EMAIL"
-
-# Get artifact registry URL
-ARTIFACT_REGISTRY=$(terraform output -raw artifact_registry_repository_url)
-echo "Artifact Registry: $ARTIFACT_REGISTRY"
-```
-
-### Phase 3: Update Cloud Run YAML with Terraform Outputs
-
-#### 3.1 Edit Cloud Run Service YAML
-
-Edit `resources/prod/service.prod.yaml`:
-
-```yaml
-spec:
-  template:
-    spec:
-      serviceAccountName: prod-cloud-run-sa  # Should match $SA_EMAIL
-      containers:
-        - env:
-            - name: DB_HOST
-              value: "10.0.1.x"  # Replace with $VM_IP
-```
-
-Replace `"REPLACE_WITH_VM_INTERNAL_IP"` with the actual VM internal IP from Terraform output.
-
-### Phase 4: Deploy Application with Skaffold
-
-#### 4.1 Deploy Cloud Run Service
-
-```bash
-# From project root
+# 5. Build and deploy the app
 skaffold run -p prod
 ```
 
-This will:
-- Build Docker image using Cloud Build
-- Push to Artifact Registry
-- Deploy to Cloud Run using the YAML manifest
+The Cloud Run service has internal ingress, so its `*.run.app` URL is not reachable from the internet. That's on purpose. To reach the database from your laptop, open an IAP tunnel: `terraform -chdir=terraform output db_connection_command`.
 
-#### 4.2 Verify Cloud Run Deployment
+**Clean up:**
 
 ```bash
-gcloud run services list --region=us-central1
-
-# Get Cloud Run service details
-gcloud run services describe prod-lab-app \
-  --region=us-central1 \
-  --format="value(status.url)"
+gcloud run services delete prod-lab-app --region=us-central1   # Skaffold-managed, not in Terraform state
+terraform -chdir=terraform destroy -var-file=prod.tfvars
 ```
 
-**Note**: The Cloud Run URL will NOT be publicly accessible (internal ingress only). This is expected!
-
-### Phase 5: Deploy Load Balancer and Complete Setup
-
-#### 5.1 Uncomment Load Balancer Module
-
-Edit `terraform/main.tf` and **uncomment** the Load Balancer, Cloudflare, and Monitoring modules:
-
-```hcl
-# Load Balancer Module
-module "load_balancer" {
-  source = "./modules/load-balancer"
-  ...
-}
-
-# Cloudflare Module
-module "cloudflare" {
-  ...
-}
-
-# Monitoring Module
-module "monitoring" {
-  ...
-}
-```
-
-#### 5.2 Apply Terraform with Load Balancer
-
-```bash
-cd terraform
-
-terraform apply -var-file="prod.tfvars"
-```
-
-This will create:
-- Regional Load Balancer
-- Static IP
-- Google-managed SSL certificate
-- Serverless NEG pointing to Cloud Run
-- Cloudflare DNS A records
-- Monitoring alerts
-
-#### 5.3 Get Load Balancer IP
-
-```bash
-LB_IP=$(terraform output -raw load_balancer_ip)
-echo "Load Balancer IP: $LB_IP"
-```
-
-### Phase 6: Verify SSL Certificate
-
-The SSL certificate may take 10-15 minutes to provision via DNS validation.
-
-```bash
-# Check SSL certificate status
-watch gcloud compute ssl-certificates describe prod-lb-cert \
-  --region=us-central1 \
-  --format="get(managed.status)"
-```
-
-Wait until status shows `ACTIVE`.
-
-### Phase 7: Test Deployment
-
-#### 7.1 Test via Load Balancer IP (Direct)
-
-```bash
-# Test health endpoint
-curl -H "Host: health.api.avodzis.online" http://$LB_IP/health
-
-# Test main page
-curl -H "Host: api.avodzis.online" http://$LB_IP/
-```
-
-#### 7.2 Test via Cloudflare DNS
-
-Once SSL cert is ACTIVE:
-
-```bash
-# Test main page
-curl https://api.avodzis.online/
-
-# Test health endpoint
-curl https://health.api.avodzis.online/health
-
-# Test API endpoint
-curl https://api.avodzis.online/api/quote
-
-# Test static files
-curl https://api.avodzis.online/static/style.css
-```
-
-#### 7.3 Verify Cache Headers
-
-```bash
-curl -I https://api.avodzis.online/static/style.css | grep -i cache
-# Should see: cache-control: public, max-age=3600
-
-curl -I https://api.avodzis.online/api/quote | grep -i cache
-# Should see: cache-control: public, max-age=300
-
-curl -I https://health.api.avodzis.online/health | grep -i cache
-# Should see: cache-control: no-cache
-```
-
-#### 7.4 Verify Cloud Run is Internal-Only
-
-```bash
-# This should FAIL (403 or timeout) - proving it's internal-only
-CLOUD_RUN_URL=$(gcloud run services describe prod-lab-app \
-  --region=us-central1 --format='value(status.url)')
-
-curl $CLOUD_RUN_URL
-# Expected: 403 Forbidden or timeout
-```
-
-### Phase 8: Connect to Database
-
-#### 8.1 Via IAP Tunnel
-
-```bash
-# Start IAP tunnel
-gcloud compute start-iap-tunnel prod-postgres-vm 5432 \
-  --local-host-port=localhost:5432 \
-  --zone=us-central1-a
-
-# In another terminal, get DB password
-gcloud secrets versions access latest --secret="prod-db-password"
-
-# Connect with psql
-psql -h localhost -p 5432 -U labuser -d labdb
-
-# Query quotes
-SELECT * FROM quotes;
-```
-
-## Architecture Highlights
-
-### Security Features
-
-1. **Cloud Run Internal Ingress**: Not accessible from internet
-2. **Load Balancer**: Single entry point with static IP
-3. **Cloudflare WAF**: Geo-restriction (ES/AM only), rate limiting, OWASP rules
-4. **PostgreSQL**: Internal IP only, IAP tunnel access
-5. **Secrets**: Stored in Secret Manager, not hardcoded
-
-### Cost Optimization
-
-- **e2-micro VM**: Always Free tier
-- **Cloud Run**: Pay per use, min 1 instance
-- **Regional Load Balancer**: ~$14-17/month
-- **Cloudflare**: Free tier
-- **Total**: ~$15-20/month
-
-### Performance Features
-
-1. **Min 1 Instance**: No cold starts
-2. **VPC Direct Egress**: Fast database access
-3. **Cloudflare Caching**: Static (1h), API (5m), Health (no-cache)
-4. **Connection Pooling**: PostgreSQL connection pool (max 10)
-
-## Monitoring
-
-### View Logs
-
-```bash
-# Cloud Run logs
-gcloud run services logs read prod-lab-app --region=us-central1 --limit=50
-
-# VM logs
-gcloud compute instances get-serial-port-output prod-postgres-vm \
-  --zone=us-central1-a
-```
-
-### View Metrics
-
-Go to GCP Console → Cloud Run → prod-lab-app → Metrics
-
-Or use:
-
-```bash
-gcloud monitoring dashboards list
-```
-
-### Check Alerts
-
-```bash
-gcloud alpha monitoring policies list
-```
-
-## Cleanup
-
-To destroy all resources:
-
-```bash
-cd terraform
-
-terraform destroy -var-file="prod.tfvars"
-```
-
-This will remove:
-- Load Balancer
-- Cloud Run service (if managed by Terraform)
-- PostgreSQL VM
-- VPC and networking
-- Secrets
-- Artifact Registry
-- Cloudflare DNS records
-
-**Note**: Cloud Run service deployed via Skaffold must be deleted manually:
-
-```bash
-gcloud run services delete prod-lab-app --region=us-central1
-```
-
-## Troubleshooting
-
-### SSL Certificate Not Provisioning
-
-- Verify DNS records are created: `dig api.avodzis.online`
-- Check Cloudflare proxy is enabled (orange cloud)
-- Wait up to 15 minutes for DNS propagation
-
-### Cloud Run Can't Connect to Database
-
-- Verify VM internal IP in Cloud Run YAML matches Terraform output
-- Check firewall rules allow Cloud Run subnet to PostgreSQL port 5432
-- Verify VPC Direct Egress is configured in Cloud Run YAML
-
-### 403 Errors from Cloudflare
-
-- Check geo-restriction WAF rule
-- Verify you're accessing from ES or AM
-- Check rate limiting (max 100 req/min)
-
-### Skaffold Build Fails
-
-```bash
-# Enable Cloud Build API
-gcloud services enable cloudbuild.googleapis.com
-
-# Check service account permissions
-gcloud projects get-iam-policy $PROJECT_ID
-```
-
-## Next Steps
-
-1. Set up GitHub Actions for CI/CD
-2. Add custom domain SSL certificate
-3. Implement blue/green deployments
-4. Add more monitoring dashboards
-5. Set up log-based metrics
-
-## Resources
-
-- [Cloud Run Documentation](https://cloud.google.com/run/docs)
-- [Regional Load Balancer](https://cloud.google.com/load-balancing/docs/https)
-- [Cloudflare API](https://developers.cloudflare.com/api/)
-- [Skaffold Documentation](https://skaffold.dev/docs/)
+## Design notes
+
+- **Direct VPC egress, not a Serverless VPC Access connector.** There are no connector VMs to pay for or manage. The connector resource is still in `cloud-run-prerequisites`, commented out. Egress is `PRIVATE_RANGES_ONLY`, so only traffic to 10.x goes through the VPC.
+- **Min 1 instance.** This avoids cold starts, at the cost of paying for an idle instance.
+- **No public database.** The VM has no external IP. SSH works only from IAP's range (35.235.240.0/20), and port 5432 only from the subnet.
+- **Secrets.** Terraform generates the DB password (`random_password`) and stores it in Secret Manager, and Cloud Run reads it through `secretKeyRef`. The password is also in Terraform state, so the state bucket must stay private.
+- **Least privilege, mostly.** Each workload has its own service account with log/metric writer roles. The Cloud Run SA's `secretAccessor` role is project-wide. It could be scoped to the one secret.
+
+## Changes made in the 2026 cleanup
+
+- The HTML page escapes quote text, and error responses no longer include internal error messages.
+- `package-lock.json` is now committed (it was git-ignored, so `npm ci` in the Dockerfile couldn't work). Dependencies are on current 4.x/8.x releases with `npm audit` clean, and the base image is `node:24-alpine`.
+- The deploy workflow is manual-only, and workflow token permissions are cut to `contents: read`.
+- The project ID, state bucket, VM IP and email are now placeholders or variables. The Terraform formatting was fixed.
