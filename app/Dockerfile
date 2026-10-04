@@ -1,12 +1,12 @@
 # Stage 1: production dependencies only
-FROM node:24-alpine AS deps
+FROM node:26-alpine AS deps
 
 WORKDIR /app
 COPY package.json package-lock.json ./
 RUN npm ci --omit=dev && npm cache clean --force
 
 # Stage 2: runtime image
-FROM node:24-alpine
+FROM node:26-alpine
 
 ENV NODE_ENV=production
 WORKDIR /app
